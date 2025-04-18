@@ -3,7 +3,6 @@ import type {
   Marker as TMarker,
   MarkerClusterGroup as TMarkerClusterGroup,
 } from "leaflet";
-import { clamp } from "lodash-es";
 import { EllipsisIcon, MapIcon } from "lucide-react";
 import React, { useImperativeHandle } from "react";
 import type { LoaderFunctionArgs } from "react-router";
@@ -48,6 +47,7 @@ import {
 import { useDralSafearea } from "./DralSafearea";
 import { createClusterIcon, createHighlightedClusterIcon } from "./Markers";
 import PinIcon from "./icons/PinIcon";
+import { useMapPositioning } from "~/hooks/useMapPositioning";
 
 import tailwind_url from "~/app.css?url";
 
@@ -127,7 +127,7 @@ const InvalidateMapOnRouteChange = () => {
   return null;
 };
 
-const MILE = 1609.34; // 50 miles in meters
+const MILE = 1609.34; // 1 mile in meters
 
 type PcsLocationLite = {
   id: string;
@@ -190,6 +190,7 @@ const async = async async => async()
 
 export default function MapScreen() {
   const { companies, locations, posts } = useLoaderData<typeof loader>();
+  const mapRef = React.useRef<Map | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -250,12 +251,6 @@ export default function MapScreen() {
     });
   }, [pcs_posts, map_bounds]);
 
-  const safearea = useDralSafearea();
-
-  const [user_location, set_user_location] = React.useState<
-    [number, number] | null
-  >(null);
-
   const map_ref = React.useRef<Map>(null);
   const pcs_cluster_ref = React.useRef<TMarkerClusterGroup>(null as any);
   const pcs_marker_refs = React.useRef<{ [id: string]: TMarker }>({});
@@ -267,99 +262,55 @@ export default function MapScreen() {
   const open_pcs_3 = useMatch("/post/:post/*")?.params;
   const open_pcs = open_pcs_1 ?? open_pcs_2 ?? open_pcs_3 ?? ({} as any);
 
+  const infoSectionRef = React.useRef<HTMLDivElement>(null);
+  const [measuredInfoBoxWidth, setMeasuredInfoBoxWidth] = React.useState(0);
+
+  const [isSidebarReady, setIsSidebarReady] = React.useState(false);
+
+  const locationId = "location" in open_pcs ? open_pcs.location : null;
+  const postId = "post" in open_pcs ? open_pcs.post : null;
+
+  const [sidebarWidth, setSidebarWidth] = React.useState(0);
+  const [mapTriggerKey, setMapTriggerKey] = React.useState(0);
+
+  const [user_location, set_user_location] = React.useState<
+    [number, number] | null
+  >(null);
+  
+  const safearea = useDralSafearea();
+
+  const combinedOffsets = React.useMemo(() => {
+    if (!safearea.ready) return null;
+    const base = safearea.get();
+    return {
+      ...base,
+      left: base.left + sidebarWidth,
+    };
+  }, [safearea.ready, sidebarWidth]);
+  
   React.useEffect(() => {
-    const map = map_ref.current!;
-
-    const refs =
-      "location" in open_pcs ?
-        {
-          cluster_group: pcs_cluster_ref.current,
-          marker: pcs_marker_refs.current[open_pcs.location!],
-        }
-      : null;
-
-    if (refs && map && refs.marker) {
-      const { cluster_group, marker } = refs;
-
-      const coordinates = marker.getLatLng();
-      const to = [coordinates.lat, coordinates.lng] as [number, number];
-
-      const safearea_offsets = safearea.get();
-      // let skillbridge = dod_locations.find((x) => x.id === open_location_id)!;
-      // let cluster_group = markers_ref.current;
-      // let marker = marker_refs.current[open_location_id];
-
-      const bounds = Offcenter.getBounds(map, safearea_offsets);
-
-      const cluster = cluster_group?.getVisibleParent(marker);
-      if (cluster != marker) {
-        // map.setView([skillbridge.location.LAT, skillbridge.location.LONG], 12);
-        // if (bounds.contains(to)) return;
-        // dod_cluster_ref.current.zoomToShowLayer(layer)
-
-        async(async () => {
-          const new_zoom = Math.max(12, map.getZoom());
-          if (!bounds.contains(to) || new_zoom !== map.getZoom()) {
-            // @ts-ignore
-            const uhhh = marker.__parent as MarkerCluster;
-            // @ts-ignore
-            const zoomies = uhhh._zoom as number;
-            const new_zoom =
-              (
-                (map.getZoom() >= 7 && uhhh.getChildCount() < 5) ||
-                map.getZoom() >= 9
-              ) ?
-                map.getZoom()
-              : clamp(
-                  zoomies + 1,
-                  Math.max(map.getZoom(), 8),
-                  map.getMaxZoom(),
-                );
-
-            map.setView(
-              Offcenter.recenter(to, new_zoom, safearea_offsets),
-              new_zoom,
-              {
-                animate: true,
-              },
-            );
-
-            await Promise.race([
-              new Promise((resolve) => {
-                map.once("moveend zoomend", () => resolve(undefined));
-              }),
-              new Promise((resolve) => {
-                setTimeout(resolve, 500);
-              }),
-            ]);
-          }
-
-          const cluster = cluster_group?.getVisibleParent(marker);
-          if (cluster instanceof MarkerCluster) {
-            const c = cluster as MarkerCluster;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 300);
-            });
-            c.spiderfy();
-          } else {
-            /// pass
-          }
-        });
-      } else {
-        if (bounds.contains(coordinates)) return;
-
-        map.setView(
-          Offcenter.recenter(to, map.getZoom(), safearea_offsets),
-          map.getZoom(),
-          { animate: true, duration: 0.7 },
-        );
-      }
+    if (sidebarWidth > 0 && safearea.ready) {
+      console.log("🚀 Triggering map positioning because postId/locationId changed.");
+      setMapTriggerKey((k) => k + 1); // Increment to trigger re-run
     }
-  }, [
-    "location" in open_pcs && open_pcs.location,
-    "post" in open_pcs && open_pcs.post,
-  ]);
+  }, [sidebarWidth, safearea.ready, open_pcs.post, open_pcs.location]);
 
+  console.log("📦 sidebarWidth", sidebarWidth);
+  console.log("📦 safearea.ready", safearea.ready);
+
+  useMapPositioning({
+    map: map_ref.current,
+    postId: open_pcs.post,
+    locationId: "location" in open_pcs ? open_pcs.location : null,
+    sidebarWidth,
+    offsets: combinedOffsets,
+    pcs_posts,
+    markerRefs: pcs_marker_refs.current,
+    clusterGroup: pcs_cluster_ref.current,
+    triggerKey: mapTriggerKey.toString(),
+  });
+
+  
   const selected_location = React.useMemo<MapState["selected_location"]>(() => {
     if ("location" in open_pcs) {
       return { type: "pcs-location", id: open_pcs.location! };
@@ -567,7 +518,7 @@ export default function MapScreen() {
 
           <div className="pointer-events-none absolute inset-0 flex flex-col-reverse justify-start overflow-hidden md:flex-row">
             <div className="pointer-events-auto contents">
-              <Outlet />
+              <Outlet context={{ infoSectionRef, setSidebarWidth }}/>
             </div>
             <div
               className="absolute inset-0 m-4 md:static md:inset-auto md:flex-1"
@@ -854,7 +805,7 @@ const PcsMarkers = ({
       cluster.setIcon(createClusterIcon(cluster));
     };
   }, [mapstate$]);
-
+  const clusterRef = React.useRef<typeof MarkerClusterGroup | null>(null);
   return (
     <MarkerClusterGroup chunkedLoading ref={internal_cluster_ref}>
       {posts.map((location, index) => (

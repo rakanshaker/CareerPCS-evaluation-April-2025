@@ -19,19 +19,23 @@ export const useDralSafearea = () => {
   ]);
 
   const get_safearea_quickly = () => {
-    const map_container = map_container_internal_ref.current!;
-    const map_safearea = map_safearea_internal_ref.current!;
-
+    const map_container = map_container_internal_ref.current;
+    const map_safearea = map_safearea_internal_ref.current;
+  
+    if (!map_container || !map_safearea) {
+      return { top: 0, right: 0, bottom: 0, left: 0 };
+    }
+  
     const map_container_bounds = map_container.getBoundingClientRect();
     const map_safearea_bounds = map_safearea.getBoundingClientRect();
-
+  
     return {
       top: map_safearea_bounds.top - map_container_bounds.top,
       right: -(map_safearea_bounds.right - map_container_bounds.right),
       bottom: -(map_safearea_bounds.bottom - map_container_bounds.bottom),
       left: map_safearea_bounds.left - map_container_bounds.left,
     };
-  };
+  };  
 
   const safearea_offsets = {
     top: map_safearea_bounds.top - map_container_bounds.top,
