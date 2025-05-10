@@ -3,7 +3,6 @@ import type {
   Marker as TMarker,
   MarkerClusterGroup as TMarkerClusterGroup,
 } from "leaflet";
-import { clamp } from "lodash-es";
 import { EllipsisIcon, MapIcon } from "lucide-react";
 import React, { useImperativeHandle } from "react";
 import type { LoaderFunctionArgs } from "react-router";
@@ -48,6 +47,7 @@ import {
 import { useDralSafearea } from "./DralSafearea";
 import { createClusterIcon, createHighlightedClusterIcon } from "./Markers";
 import PinIcon from "./icons/PinIcon";
+import { handleLocation, handlePost, setHandled } from "./mapHelper";
 
 import tailwind_url from "~/app.css?url";
 
@@ -127,7 +127,7 @@ const InvalidateMapOnRouteChange = () => {
   return null;
 };
 
-const MILE = 1609.34; // 50 miles in meters
+const MILE = 1609.34; // 1 mile in meters
 
 type PcsLocationLite = {
   id: string;
@@ -267,99 +267,76 @@ export default function MapScreen() {
   const open_pcs_3 = useMatch("/post/:post/*")?.params;
   const open_pcs = open_pcs_1 ?? open_pcs_2 ?? open_pcs_3 ?? ({} as any);
 
+  // get width of the info sidebar
+  const infoSectionRef = React.useRef<HTMLDivElement>(null);
+  const [sidebarWidth, setSidebarWidth] = React.useState(0);
+
+  const locationId = "location" in open_pcs ? open_pcs.location : null;
+  const postId = "post" in open_pcs ? open_pcs.post : null;
+
+  // observer to watch changes in sidebar width
   React.useEffect(() => {
-    const map = map_ref.current!;
-
-    const refs =
-      "location" in open_pcs ?
-        {
-          cluster_group: pcs_cluster_ref.current,
-          marker: pcs_marker_refs.current[open_pcs.location!],
-        }
-      : null;
-
-    if (refs && map && refs.marker) {
-      const { cluster_group, marker } = refs;
-
-      const coordinates = marker.getLatLng();
-      const to = [coordinates.lat, coordinates.lng] as [number, number];
-
-      const safearea_offsets = safearea.get();
-      // let skillbridge = dod_locations.find((x) => x.id === open_location_id)!;
-      // let cluster_group = markers_ref.current;
-      // let marker = marker_refs.current[open_location_id];
-
-      const bounds = Offcenter.getBounds(map, safearea_offsets);
-
-      const cluster = cluster_group?.getVisibleParent(marker);
-      if (cluster != marker) {
-        // map.setView([skillbridge.location.LAT, skillbridge.location.LONG], 12);
-        // if (bounds.contains(to)) return;
-        // dod_cluster_ref.current.zoomToShowLayer(layer)
-
-        async(async () => {
-          const new_zoom = Math.max(12, map.getZoom());
-          if (!bounds.contains(to) || new_zoom !== map.getZoom()) {
-            // @ts-ignore
-            const uhhh = marker.__parent as MarkerCluster;
-            // @ts-ignore
-            const zoomies = uhhh._zoom as number;
-            const new_zoom =
-              (
-                (map.getZoom() >= 7 && uhhh.getChildCount() < 5) ||
-                map.getZoom() >= 9
-              ) ?
-                map.getZoom()
-              : clamp(
-                  zoomies + 1,
-                  Math.max(map.getZoom(), 8),
-                  map.getMaxZoom(),
-                );
-
-            map.setView(
-              Offcenter.recenter(to, new_zoom, safearea_offsets),
-              new_zoom,
-              {
-                animate: true,
-              },
-            );
-
-            await Promise.race([
-              new Promise((resolve) => {
-                map.once("moveend zoomend", () => resolve(undefined));
-              }),
-              new Promise((resolve) => {
-                setTimeout(resolve, 500);
-              }),
-            ]);
-          }
-
-          const cluster = cluster_group?.getVisibleParent(marker);
-          if (cluster instanceof MarkerCluster) {
-            const c = cluster as MarkerCluster;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 300);
-            });
-            c.spiderfy();
-          } else {
-            /// pass
-          }
-        });
-      } else {
-        if (bounds.contains(coordinates)) return;
-
-        map.setView(
-          Offcenter.recenter(to, map.getZoom(), safearea_offsets),
-          map.getZoom(),
-          { animate: true, duration: 0.7 },
-        );
+    const el = infoSectionRef.current;
+    if (!el) return;
+  
+    // measure immediately (so first click works)
+    const measure = () => {
+      const width = el.getBoundingClientRect().width;
+      if (width > 0) {
+        console.log("✅ Sidebar measured:", width);
+        setSidebarWidth(width);
       }
+    };
+  
+    measure();
+  
+    const obs = new ResizeObserver(measure);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [infoSectionRef.current]);
+  
+  
+  const lastHandledLocationId = React.useRef<string | null>(null);
+  const lastHandledPostId = React.useRef<string | null>(null);
+  
+  React.useEffect(() => {
+    const map = map_ref.current;
+    if (!map || !sidebarWidth) return;
+  
+    const locationId = "location" in open_pcs ? open_pcs.location : null;
+    const postId = "post" in open_pcs ? open_pcs.post : null;
+    if (!locationId && !postId) return;
+  
+    if (locationId && lastHandledLocationId.current === locationId) return;
+    if (postId && lastHandledPostId.current === postId) return;
+  
+    const clusterGroup = pcs_cluster_ref.current;
+    const offsets = {
+      ...safearea.get(),
+      left: safearea.get().left + sidebarWidth,
+    };
+    // for clarity so as not to pass () => setHandled(...) with so many params
+    const setHandledFn = () =>
+      setHandled(locationId, postId, lastHandledLocationId, lastHandledPostId);
+  
+    if (locationId) {
+      const marker = pcs_marker_refs.current[locationId];
+      if (marker) {
+        handleLocation(map, locationId, marker, clusterGroup, offsets, setHandledFn);
+      }
+    }
+  
+    if (postId) {
+      handlePost(map, postId, pcs_posts, sidebarWidth, setHandledFn);
     }
   }, [
     "location" in open_pcs && open_pcs.location,
     "post" in open_pcs && open_pcs.post,
+    sidebarWidth,
+    pcs_posts,
   ]);
-
+  
+  
   const selected_location = React.useMemo<MapState["selected_location"]>(() => {
     if ("location" in open_pcs) {
       return { type: "pcs-location", id: open_pcs.location! };
@@ -567,7 +544,7 @@ export default function MapScreen() {
 
           <div className="pointer-events-none absolute inset-0 flex flex-col-reverse justify-start overflow-hidden md:flex-row">
             <div className="pointer-events-auto contents">
-              <Outlet />
+              <Outlet context={{ infoSectionRef }}/>
             </div>
             <div
               className="absolute inset-0 m-4 md:static md:inset-auto md:flex-1"

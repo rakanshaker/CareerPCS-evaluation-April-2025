@@ -1,5 +1,6 @@
 import { Companies, db, Posts } from "~/services.server/store";
 import type { Route } from "./+types/route";
+import { useOutletContext } from "react-router";
 
 export const loader = async ({
   request,
@@ -19,8 +20,11 @@ export default function PostPage({
   loaderData: { post, company },
   params,
 }: Route.ComponentProps) {
+  const { infoSectionRef } = useOutletContext<{ infoSectionRef: React.RefObject<HTMLDivElement> }>();
+
   return (
     <section
+      ref={infoSectionRef} // ← ✅ Attach the ref here
       className="z-50 flex max-h-[60%] flex-col rounded-t-2xl bg-white md:m-4 md:max-h-none md:w-[50%] md:max-w-prose md:min-w-[300px] md:rounded-2xl"
       style={{
         boxShadow: "0 0 2px rgb(0 0 0/20%),0 -1px 0 rgb(0 0 0/2%)",
